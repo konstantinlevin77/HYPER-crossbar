@@ -2,14 +2,15 @@
 
 # HYPER: A Foundation Model for Inductive Link Prediction with Knowledge Hypergraphs
 
+[![arXiv](https://img.shields.io/badge/arXiv-2506.12362-b31b1b.svg)](https://arxiv.org/abs/2506.12362)
 [![PyTorch 2.1+](https://img.shields.io/badge/PyTorch-2.1%2B-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![PyG 2.4+](https://img.shields.io/badge/PyG-2.4%2B-3C2179?logo=python&logoColor=white)](https://pytorch-geometric.readthedocs.io/)
 [![Triton](https://img.shields.io/badge/Triton-2.1%2B-1a237e?logo=nvidia&logoColor=white)](https://triton-lang.org/)
 ![License MIT](https://img.shields.io/badge/License-MIT-green.svg?labelColor=gray)
 
+
 </div>
 
-**“HYPER: A Foundation Model for Inductive Link Prediction with Knowledge Hypergraphs.”**
 
 A single pre-trained **HYPER** checkpoint achieves strong **zero-shot** link prediction performance across *arbitrary* knowledge hypergraphs and can be **fine-tuned** to further enhance accuracy.  
 Unlike traditional knowledge graph (KG) models, **HYPER** natively supports **multi-relational, ordered hyperedges** of the form *(r(u₁, u₂, …))* without relying on qualifiers, and seamlessly accommodates both **transductive** and **inductive** evaluation settings.
@@ -212,3 +213,16 @@ Major parts of the training and evaluation engine are adapted from the ULTRA PyG
 We also thank the developers of **PyTorch**, **PyTorch-Geometric**, and **Triton** for their indispensable libraries.
 
 Happy hyper-reasoning! 🚀
+
+---
+## Citation
+If you find this repo or paper useful, please cite this:
+
+```
+@article{huang2025hyper,
+  title={HYPER: A Foundation Model for Inductive Link Prediction with Knowledge Hypergraphs},
+  author={Huang, Xingyue and Galkin, Mikhail and Bronstein, Michael M and Ceylan, {\.I}smail {\.I}lkan},
+  journal={arXiv preprint arXiv:2506.12362},
+  year={2025}
+}
+```
