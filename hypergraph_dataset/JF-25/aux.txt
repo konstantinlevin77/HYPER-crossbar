@@ -1,4 +1,3 @@
-080kw1	0jmk7
 american_football.football_historical_coach_position	0bhvvf	03nxcl
 american_football.football_historical_coach_position	0bhvvf	040zjnd
 american_football.game_passing_statistics	03zy1_	0793dn5

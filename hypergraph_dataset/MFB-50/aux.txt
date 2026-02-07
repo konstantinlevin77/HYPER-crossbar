@@ -278,7 +278,6 @@ kp_lw*philosopher	m.03dft3	m.05qmj	m.05r79
 kp_lw*philosopher	m.03dft3	m.0m93	m.05qfh
 kp_lw*philosopher	m.03dft3	m.0m93	m.09xq9d
 kp_lw*philosopher	m.03dfth	m.07h1q	m.05r79
-m.01r2l	m.01r2l
 music*instrument	m.05148p4	m.0136pk	m.01679d
 music*instrument	m.05148p4	m.015_30	m.01679d
 music*instrument	m.05148p4	m.016ntp	m.01679d

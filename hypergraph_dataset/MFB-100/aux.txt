@@ -212,7 +212,6 @@ influence*influence_node	m.0yxl	m.03f70xs
 influence*influence_node	m.0yxl	m.040db
 influence*influence_node	m.0yxl	m.04xjp
 influence*influence_node	m.0yxl	m.0lrh
-m.02dsz	m.02dsz
 music*instrument	m.05148p4	m.0161c2	m.01679d
 music*instrument	m.05148p4	m.01vn35l	m.01679d
 music*instrument	m.05148p4	m.01w5gg6	m.01679d

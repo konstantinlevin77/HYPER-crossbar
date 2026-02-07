@@ -68,7 +68,6 @@ influence*influence_node	m.0zm1	m.0dw6b
 location*administrative_division_capital_relationship	m.0m2by	m.0fr0t
 location*administrative_division_capital_relationship	m.0mrhq	m.03l2n
 location*us_county	m.0zgfm	m.02frhbc
-m.02856r	m.02856r
 medicine*medical_trial	m.01664_	m.0d19y2	m.02zsn	m.0rh6k
 music*artist	m.011j5x	m.01clyr	m.018qpq
 music*artist	m.011j5x	m.01qy6m	m.0rj0z
