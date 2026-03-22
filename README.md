@@ -113,7 +113,7 @@ python script/run.py \
 ### Fine-Tuning
 ```bash
 python script/run.py \
-    -c config/finetune/HYPER_finetune_inference.yaml \
+    -c config/finetune/HYPER_inference_inductive.yaml \
     --dataset JF100 --epochs 1 --bpe null --gpus [0] \
     --ckpt ckpts/HYPER-3KG+2HG \
     --finetune
@@ -122,7 +122,7 @@ python script/run.py \
 ### End-to-End Training
 ```bash
 python script/run.py \
-    -c config/finetune/HYPER_finetune_inference.yaml \
+    -c config/finetune/HYPER_inference_inductive.yaml \
     --dataset JF100 --epochs 10 --bpe null --gpus [0] \
     --ckpt null \
     --train
@@ -219,10 +219,10 @@ Happy hyper-reasoning! 🚀
 If you find this repo or paper useful, please cite this:
 
 ```
-@article{huang2025hyper,
+@inproceedings{huang2026hyper,
   title={HYPER: A Foundation Model for Inductive Link Prediction with Knowledge Hypergraphs},
   author={Huang, Xingyue and Galkin, Mikhail and Bronstein, Michael M and Ceylan, {\.I}smail {\.I}lkan},
-  journal={arXiv preprint arXiv:2506.12362},
-  year={2025}
+  booktitle={International Conference on Learning Representations},
+  year={2026}
 }
 ```
