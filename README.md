@@ -106,6 +106,7 @@ python script/run.py \
 python script/run.py \
     -c config/inference/HYPER_inference_inductive.yaml \
     --dataset JF100 \
+    --version None \
     --epochs 0 --bpe null --gpus [0] \
     --ckpt ckpts/HYPER-3KG+2HG
 ```
@@ -114,7 +115,7 @@ python script/run.py \
 ```bash
 python script/run.py \
     -c config/inference/HYPER_inference_inductive.yaml \
-    --dataset JF100 --epochs 1 --bpe null --gpus [0] \
+    --dataset JF100  --version None --epochs 1 --bpe null --gpus [0] \
     --ckpt ckpts/HYPER-3KG+2HG \
     --finetune
 ```
@@ -123,7 +124,7 @@ python script/run.py \
 ```bash
 python script/run.py \
     -c config/inference/HYPER_inference_inductive.yaml \
-    --dataset JF100 --epochs 10 --bpe null --gpus [0] \
+    --dataset JF100  --version None --epochs 10 --bpe null --gpus [0] \
     --ckpt null \
     --train
 ```
