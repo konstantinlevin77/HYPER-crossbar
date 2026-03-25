@@ -113,7 +113,7 @@ python script/run.py \
 ### Fine-Tuning
 ```bash
 python script/run.py \
-    -c config/finetune/HYPER_inference_inductive.yaml \
+    -c config/inference/HYPER_inference_inductive.yaml \
     --dataset JF100 --epochs 1 --bpe null --gpus [0] \
     --ckpt ckpts/HYPER-3KG+2HG \
     --finetune
@@ -122,7 +122,7 @@ python script/run.py \
 ### End-to-End Training
 ```bash
 python script/run.py \
-    -c config/finetune/HYPER_inference_inductive.yaml \
+    -c config/inference/HYPER_inference_inductive.yaml \
     --dataset JF100 --epochs 10 --bpe null --gpus [0] \
     --ckpt null \
     --train
