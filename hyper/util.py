@@ -58,6 +58,10 @@ def parse_args():
     parser.add_argument("-c", "--config", help="yaml configuration file", required=True)
     parser.add_argument("-s", "--seed", help="random seed for PyTorch", type=int, default=1024)
     parser.add_argument("-p", "--project", help="neptune project name",  type=str, default=None)
+    parser.add_argument("--wandb_project", help="Weights & Biases project name", type=str, default=None)
+    parser.add_argument("--wandb_entity", help="Weights & Biases entity/team name", type=str, default=None)
+    parser.add_argument("--wandb_name", help="Weights & Biases run name", type=str, default=None)
+    parser.add_argument("--wandb_mode", help="Weights & Biases mode: online, offline, or disabled", type=str, default=None)
     
     args, unparsed = parser.parse_known_args()
     # get dynamic arguments defined in the config file
@@ -192,6 +196,42 @@ def create_neptune_run(args, var, cfg):
 
     run["parameters/cfg"] = dict(cfg)
     return run
+
+
+def create_wandb_run(args, var, cfg, working_dir=None):
+    if args.wandb_project is None:
+        logger.warning("WandB project not specified. Will proceed without WandB logging")
+        return None
+
+    try:
+        import wandb
+    except ImportError as exc:
+        raise ImportError(
+            "wandb is not installed in this environment. Install it or run without --wandb_project."
+        ) from exc
+
+    wandb_config = {
+        "args": vars(args),
+        "template_vars": var,
+        "cfg": dict(cfg),
+    }
+    if working_dir is not None:
+        wandb_config["working_dir"] = working_dir
+
+    run = wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        name=args.wandb_name,
+        mode=args.wandb_mode,
+        config=wandb_config,
+        dir=working_dir,
+    )
+    return run
+
+
+def finish_wandb_run(wandb_logger):
+    if wandb_logger is not None:
+        wandb_logger.finish()
 
 
 

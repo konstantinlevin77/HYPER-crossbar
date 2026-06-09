@@ -1,0 +1,39 @@
+{
+  "input_dir": "generated_hypergraphs/hyper_compliant",
+  "output_dir": "generated_hypergraphs/hyper_compliant_max_arity_150",
+  "max_arity": 150,
+  "format": "auto",
+  "processed_files": 3,
+  "total_edges": 22781,
+  "kept_edges": 19475,
+  "removed_edges": 3306,
+  "files": [
+    {
+      "input": "generated_hypergraphs/hyper_compliant/test.txt",
+      "output": "generated_hypergraphs/hyper_compliant_max_arity_150/test.txt",
+      "kept": 1940,
+      "removed": 339,
+      "total": 2279,
+      "max_arity_before": 2558,
+      "max_arity_after": 150
+    },
+    {
+      "input": "generated_hypergraphs/hyper_compliant/train.txt",
+      "output": "generated_hypergraphs/hyper_compliant_max_arity_150/train.txt",
+      "kept": 15571,
+      "removed": 2653,
+      "total": 18224,
+      "max_arity_before": 5487,
+      "max_arity_after": 150
+    },
+    {
+      "input": "generated_hypergraphs/hyper_compliant/valid.txt",
+      "output": "generated_hypergraphs/hyper_compliant_max_arity_150/valid.txt",
+      "kept": 1964,
+      "removed": 314,
+      "total": 2278,
+      "max_arity_before": 3219,
+      "max_arity_after": 150
+    }
+  ]
+}

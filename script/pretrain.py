@@ -22,6 +22,33 @@ from hyper.models import HYPER, TransductiveHCNet
 separator = ">" * 30
 line = "-" * 30
 
+
+def _metric_value(value):
+    if torch.is_tensor(value):
+        return value.detach().cpu().item()
+    return value
+
+
+def _wandb_log_metrics(wandb_logger, prefix, metrics, epoch):
+    if wandb_logger is None or metrics is None:
+        return
+
+    payload = {"epoch": epoch}
+    for metric_name in ("mrr", "hits@1", "hits@10"):
+        if metric_name in metrics:
+            payload[f"{prefix}_{metric_name}"] = _metric_value(metrics[metric_name])
+    if payload:
+        wandb_logger.log(payload)
+
+
+def _metrics_to_compute(cfg):
+    metrics = list(cfg.task.metric)
+    for metric in ("mrr", "hits@1", "hits@10"):
+        if metric not in metrics:
+            metrics.append(metric)
+    return metrics
+
+
 def multigraph_collator(batch, train_graphs):
     probs = torch.tensor([graph.edge_index.shape[1] for graph in train_graphs]).float()
     probs /= probs.sum()
@@ -35,7 +62,7 @@ def multigraph_collator(batch, train_graphs):
     return graph, batch
 
 # here we assume that train_data and valid_data are tuples of datasets
-def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None, batch_per_epoch=None, neptune_logger=None):
+def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None, batch_per_epoch=None, neptune_logger=None, wandb_logger=None):
 
     if cfg.train.num_epoch == 0:
         return
@@ -100,6 +127,8 @@ def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None, b
                 if util.get_rank() == 0 and batch_id % cfg.train.log_interval == 0:
                     logger.warning(separator)
                     logger.warning("binary cross entropy: %g" % loss)
+                    if wandb_logger is not None:
+                        wandb_logger.log({"loss": loss.item(), "train/loss": loss.item()}, step=batch_id)
                 losses.append(loss.item())
                 if util.get_rank() == 0 and neptune_logger is not None:
                     neptune_logger["train/loss"].append(loss)
@@ -113,6 +142,8 @@ def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None, b
                 logger.warning("average binary cross entropy: %g" % avg_loss)
                 if neptune_logger is not None:
                     neptune_logger["train/epoch_loss"].append(avg_loss)
+                if wandb_logger is not None:
+                    wandb_logger.log({"epoch": epoch, "epoch_loss": avg_loss, "train/epoch_loss": avg_loss})
 
         epoch = min(cfg.train.num_epoch, i + step)
         if rank == 0:
@@ -127,7 +158,15 @@ def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None, b
         if rank == 0:
             logger.warning(separator)
             logger.warning("Evaluate on valid")
-        result = test(cfg, model, valid_data, filtered_data=filtered_data, neptune_logger=neptune_logger, logger_mode = "valid")
+        valid_metrics = test(cfg, model, valid_data, filtered_data=filtered_data, neptune_logger=neptune_logger, logger_mode = "valid", return_metrics=True)
+        result = valid_metrics["mrr"]
+        if rank == 0:
+            _wandb_log_metrics(wandb_logger, "valid", valid_metrics, epoch)
+            if wandb_logger is not None and cfg.train.get("log_train_metrics", True):
+                logger.warning(separator)
+                logger.warning("Evaluate on train")
+                train_metrics = test(cfg, model, train_data, filtered_data=filtered_data, logger_mode="train", return_metrics=True)
+                _wandb_log_metrics(wandb_logger, "train", train_metrics, epoch)
         if result > best_result:
             best_result = result
             best_epoch = epoch
@@ -141,13 +180,14 @@ def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None, b
 
 
 @torch.no_grad()
-def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_mode = "test"):
+def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_mode = "test", return_metrics=False):
     world_size = util.get_world_size()
     rank = util.get_rank()
     
     # test_data is a tuple of validation/test datasets
     # process sequentially
     all_metrics = []
+    metric_totals = {}
     num_dataset = 0
     for test_graph, filters in zip(test_data, filtered_data):
         num_dataset +=1
@@ -206,7 +246,7 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
             dist.all_reduce(all_num_negative, op=dist.ReduceOp.SUM)
 
         if rank == 0:
-            for metric in cfg.task.metric:
+            for metric in _metrics_to_compute(cfg):
                 if metric == "mr":
                     score = all_ranking.float().mean()
                 elif metric == "mrr":
@@ -228,6 +268,7 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
                     else:
                         score = (all_ranking <= threshold).float().mean()
                 logger.warning("%s: %g" % (metric, score))
+                metric_totals[metric] = metric_totals.get(metric, 0) + score
                 if neptune_logger is not None:
                     neptune_logger[f"{logger_mode}/{num_dataset}/{metric}"] = score
         mrr = (1 / all_ranking.float()).mean()
@@ -237,6 +278,13 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
             logger.warning(separator)
 
     avg_metric = sum(all_metrics) / len(all_metrics)
+    if return_metrics:
+        averaged_metrics = {}
+        if rank == 0:
+            averaged_metrics = {name: value / num_dataset for name, value in metric_totals.items()}
+        if "mrr" not in averaged_metrics:
+            averaged_metrics["mrr"] = avg_metric
+        return averaged_metrics
     return avg_metric
 
 
@@ -244,9 +292,11 @@ if __name__ == "__main__":
     args, vars = util.parse_args()
     cfg = util.load_config(args.config, context=vars)
     neptune_logger = None
+    wandb_logger = None
     working_dir = util.create_working_directory(cfg)
     if util.get_rank() == 0:
         neptune_logger = util.create_neptune_run(args, vars, cfg)
+        wandb_logger = util.create_wandb_run(args, vars, cfg, working_dir=working_dir)
 
     torch.manual_seed(args.seed + util.get_rank())
 
@@ -308,7 +358,7 @@ if __name__ == "__main__":
         for trg, valg, testg in zip(train_data, valid_data, test_data)
     ]
 
-    train_and_validate(cfg, model, train_data, valid_data if "fast_test" not in cfg.train else short_valid, filtered_data=filtered_data, batch_per_epoch=cfg.train.batch_per_epoch, neptune_logger=neptune_logger)
+    train_and_validate(cfg, model, train_data, valid_data if "fast_test" not in cfg.train else short_valid, filtered_data=filtered_data, batch_per_epoch=cfg.train.batch_per_epoch, neptune_logger=neptune_logger, wandb_logger=wandb_logger)
     if util.get_rank() == 0:
         logger.warning(separator)
         logger.warning("Evaluate on valid")
@@ -317,3 +367,5 @@ if __name__ == "__main__":
         logger.warning(separator)
         logger.warning("Evaluate on test")
     test(cfg, model, test_data, filtered_data=filtered_data,neptune_logger=neptune_logger, logger_mode = "test")
+    if util.get_rank() == 0:
+        util.finish_wandb_run(wandb_logger)

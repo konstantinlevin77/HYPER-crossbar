@@ -21,8 +21,34 @@ separator = ">" * 30
 line = "-" * 30
 
 
+def _metric_value(value):
+    if torch.is_tensor(value):
+        return value.detach().cpu().item()
+    return value
 
-def train_and_validate(cfg, model, train_data, valid_data, device, logger, filtered_data=None, batch_per_epoch=None, neptune_logger=None):
+
+def _wandb_log_metrics(wandb_logger, prefix, metrics, epoch):
+    if wandb_logger is None or metrics is None:
+        return
+
+    payload = {"epoch": epoch}
+    for metric_name in ("mrr", "hits@1", "hits@10"):
+        if metric_name in metrics:
+            payload[f"{prefix}_{metric_name}"] = _metric_value(metrics[metric_name])
+    if payload:
+        wandb_logger.log(payload)
+
+
+def _metrics_to_compute(cfg):
+    metrics = list(cfg.task.metric)
+    for metric in ("mrr", "hits@1", "hits@10"):
+        if metric not in metrics:
+            metrics.append(metric)
+    return metrics
+
+
+
+def train_and_validate(cfg, model, train_data, valid_data, device, logger, filtered_data=None, batch_per_epoch=None, neptune_logger=None, wandb_logger=None):
     if cfg.train.num_epoch == 0:
         return
 
@@ -83,6 +109,8 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
                 if util.get_rank() == 0 and batch_id % cfg.train.log_interval == 0:
                     logger.warning(separator)
                     logger.warning("binary cross entropy: %g" % loss)
+                    if wandb_logger is not None:
+                        wandb_logger.log({"loss": loss.item(), "train/loss": loss.item()}, step=batch_id)
                 losses.append(loss.item())
                 if util.get_rank() == 0 and neptune_logger is not None:
                     neptune_logger["train/loss"].append(loss)
@@ -96,6 +124,8 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
                 logger.warning("average binary cross entropy: %g" % avg_loss)
                 if neptune_logger is not None:
                     neptune_logger["train/epoch_loss"].append(avg_loss)
+                if wandb_logger is not None:
+                    wandb_logger.log({"epoch": epoch, "epoch_loss": avg_loss, "train/epoch_loss": avg_loss})
 
         epoch = min(cfg.train.num_epoch, i + step)
         if rank == 0:
@@ -110,7 +140,15 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
         if rank == 0:
             logger.warning(separator)
             logger.warning("Evaluate on valid")
-        result = test(cfg, model, valid_data, filtered_data=filtered_data, device=device, logger=logger)
+        valid_metrics = test(cfg, model, valid_data, filtered_data=filtered_data, device=device, logger=logger, return_metrics=True, neptune_logger=neptune_logger, logger_mode="valid")
+        result = valid_metrics["mrr"]
+        if rank == 0:
+            _wandb_log_metrics(wandb_logger, "valid", valid_metrics, epoch)
+            if wandb_logger is not None and cfg.train.get("log_train_metrics", True):
+                logger.warning(separator)
+                logger.warning("Evaluate on train")
+                train_metrics = test(cfg, model, train_data, filtered_data=train_data, device=device, logger=logger, return_metrics=True, logger_mode="train")
+                _wandb_log_metrics(wandb_logger, "train", train_metrics, epoch)
         if result > best_result:
             best_result = result
             best_epoch = epoch
@@ -179,7 +217,7 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
 
     metrics = {}
     if rank == 0:
-        for metric in cfg.task.metric:
+        for metric in _metrics_to_compute(cfg):
             
             _ranking = all_ranking 
             _num_neg = all_num_negative 
@@ -211,6 +249,8 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
             metrics[metric] = score
     mrr = (1 / all_ranking.float()).mean()
 
+    if return_metrics and "mrr" not in metrics:
+        metrics["mrr"] = mrr
     return mrr if not return_metrics else metrics
 
 
@@ -219,8 +259,10 @@ if __name__ == "__main__":
     cfg = util.load_config(args.config, context=vars)
     working_dir = util.create_working_directory(cfg)
     neptune_logger = None
+    wandb_logger = None
     if util.get_rank() == 0:
         neptune_logger = util.create_neptune_run(args, vars, cfg)
+        wandb_logger = util.create_wandb_run(args, vars, cfg, working_dir=working_dir)
 
     torch.manual_seed(args.seed + util.get_rank())
 
@@ -288,7 +330,7 @@ if __name__ == "__main__":
     val_filtered_data = val_filtered_data.to(device)
     test_filtered_data = test_filtered_data.to(device)
     
-    train_and_validate(cfg, model, train_data, valid_data, filtered_data=val_filtered_data, device=device, batch_per_epoch=cfg.train.batch_per_epoch, logger=logger, neptune_logger=neptune_logger )
+    train_and_validate(cfg, model, train_data, valid_data, filtered_data=val_filtered_data, device=device, batch_per_epoch=cfg.train.batch_per_epoch, logger=logger, neptune_logger=neptune_logger, wandb_logger=wandb_logger )
     if util.get_rank() == 0:
         logger.warning(separator)
         logger.warning("Evaluate on valid")
@@ -297,3 +339,5 @@ if __name__ == "__main__":
         logger.warning(separator)
         logger.warning("Evaluate on test")
     test(cfg, model, test_data, filtered_data=test_filtered_data, device=device, logger=logger, neptune_logger=neptune_logger, logger_mode = "test")
+    if util.get_rank() == 0:
+        util.finish_wandb_run(wandb_logger)
