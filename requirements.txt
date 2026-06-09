@@ -5,3 +5,4 @@ torch-geometric>=2.4.0
 ninja
 easydict
 pyyaml
+Wandb
