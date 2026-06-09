@@ -28,16 +28,17 @@ optimizer:
 
 task:
   name: InductiveInference
-  num_negative: 256
+  num_negative: 32
   strict_negative: yes
   adversarial_temperature: 1
   metric: [mr, mrr, hits@1, hits@3, hits@10]
 
 train:
   gpus: {{ gpus }}
-  batch_size: 32
+  batch_size: 2
   num_epoch: {{ epochs }}
   log_interval: 100
   batch_per_epoch: {{ bpe }}
+  log_train_metrics: false
 
 checkpoint: {{ ckpt }}

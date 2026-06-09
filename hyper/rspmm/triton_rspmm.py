@@ -508,7 +508,7 @@ class RelConvSumAggr(torch.autograd.Function):
         # if work_group_size is not specified, pick a default value based on node feature count
         if not work_group_size:
             work_group_size = 32
-            while work_group_size < num_features_per_node:
+            while work_group_size < num_features_per_node and work_group_size < 1024:
                 work_group_size *= 2
         # calculate kernel configuration
         num_work_groups = (num_features_per_node + work_group_size - 1) // work_group_size
@@ -623,7 +623,7 @@ class HyperRelConvSumAggr(torch.autograd.Function):
         # if work_group_size is not specified, pick a default value based on node feature count
         if not work_group_size:
             work_group_size = 32
-            while work_group_size < num_features_per_node:
+            while work_group_size < num_features_per_node and work_group_size < 1024:
                 work_group_size *= 2
         # calculate kernel configuration
         num_work_groups = (num_features_per_node + work_group_size - 1) // work_group_size
@@ -690,4 +690,3 @@ class HyperRelConvSumAggr(torch.autograd.Function):
 
 
     
-
