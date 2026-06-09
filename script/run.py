@@ -304,7 +304,7 @@ if __name__ == "__main__":
         # Grail, MTDEA, HM datasets have validation sets based off the training graph
         # ILPC, Ingram have validation sets from the inference graph
         # filtering dataset should contain all true edges (base graph + (valid) + test) 
-        if "ILPC" in cfg.dataset['class'] or "Ingram" in cfg.dataset['class'] or cfg.dataset['class'] in [dataset+version for version in ["100", "75", "50", "25"] for dataset in ["JF", "WP", "MFB"]]:
+        if "ILPC" in cfg.dataset['class'] or "Ingram" in cfg.dataset['class'] or cfg.dataset['class'] == "HYPERCOMPLIANT150" or cfg.dataset['class'] in [dataset+version for version in ["100", "75", "50", "25"] for dataset in ["JF", "WP", "MFB"]]:
             # add inference, valid, test as the validation and test filtering graphs
             full_inference_edges = torch.cat([valid_data.edge_index, valid_data.target_edge_index, test_data.target_edge_index], dim=1)
             full_inference_etypes = torch.cat([valid_data.edge_type, valid_data.target_edge_type, test_data.target_edge_type])
@@ -319,7 +319,8 @@ if __name__ == "__main__":
             # validation filtering graph: train edges + validation edges
             val_filtered_data = Data(
                 edge_index=torch.cat([train_data.edge_index, valid_data.target_edge_index], dim=1),
-                edge_type=torch.cat([train_data.edge_type, valid_data.target_edge_type], num_nodes = valid_data.num_nodes)
+                edge_type=torch.cat([train_data.edge_type, valid_data.target_edge_type]),
+                num_nodes=valid_data.num_nodes
             )
     else:
         # for transductive setting, use the whole graph for filtered ranking

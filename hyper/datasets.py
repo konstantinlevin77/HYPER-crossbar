@@ -26,11 +26,21 @@ class Hypergraph_Dataset:
         self.binary_dataset = binary_dataset
         self.inductive_dataset = inductive_dataset
 
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        root = os.path.expanduser(root) if root is not None else None
         current_path = os.getcwd().split("/")
-        if current_path[-4] != "output": 
-            self.dir = os.path.join("../../../../../hypergraph_dataset", ds_name) # because in inductive, version is included in the dataset name
+        if current_path[-4] != "output":
+            legacy_dir = os.path.join("../../../../../hypergraph_dataset", ds_name) # because in inductive, version is included in the dataset name
         else:
-            self.dir = os.path.join("../../../../hypergraph_dataset", ds_name)
+            legacy_dir = os.path.join("../../../../hypergraph_dataset", ds_name)
+        candidates = [
+            os.path.join(root, ds_name) if root is not None else None,
+            root if root is not None and os.path.basename(root) == ds_name else None,
+            os.path.join(repo_root, "hypergraph_dataset", ds_name),
+            os.path.join(repo_root, "generated_hypergraphs", ds_name),
+            legacy_dir,
+        ]
+        self.dir = next((path for path in candidates if path is not None and os.path.exists(path)), legacy_dir)
         self.batch_per_epoch = None
         
         # id zero means no entity. Entity ids start from 1.
@@ -222,6 +232,9 @@ def Wikipeople(root,device):
 
 def MFB15K(root,device):
     return build_hypergraph_dataset(root, device, name="M-FB15K")
+
+def HYPERCOMPLIANT150(root, device, version=None):
+    return build_hypergraph_dataset(root, device, name="HYPERCOMPLIANT150", alternative_build=True)
 
 def JFIND(root,device, version=None):
     return build_hypergraph_dataset(root, device, name="JF-IND", inductive_dataset = True)

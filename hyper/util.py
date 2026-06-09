@@ -5,7 +5,6 @@ import copy
 import time
 import logging
 import argparse
-import neptune
 
 import yaml
 import jinja2
@@ -182,6 +181,13 @@ def create_neptune_run(args, var, cfg):
         
         logger.warning("Neptune project not specified. Will proceed with normal logging")
         return None
+
+    try:
+        import neptune
+    except ImportError as exc:
+        raise ImportError(
+            "neptune is not installed in this environment. Install it or run without -p/--project."
+        ) from exc
 
     run = neptune.init_run(
         project=args.project,
