@@ -21,6 +21,7 @@ model:
     aggregate_func: sum
     short_cut: yes
     use_triton: yes
+    remove_easy_edges: no
 
 optimizer:
   class: AdamW

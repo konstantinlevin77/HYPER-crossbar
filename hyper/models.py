@@ -109,7 +109,7 @@ class RelHCNet(nn.Module):
 
 
 class EntityHCNet(nn.Module):
-    def __init__(self, input_dim, hidden_dims, padding_idx=0, short_cut=True, aggregate_func="sum", concat_hidden = False, norm="layer_norm", transductive_hcnet=False, num_relations=None, use_triton = False, k_hop = False, **kwargs):
+    def __init__(self, input_dim, hidden_dims, padding_idx=0, short_cut=True, aggregate_func="sum", concat_hidden = False, norm="layer_norm", transductive_hcnet=False, num_relations=None, use_triton = False, k_hop = False, remove_easy_edges=True, **kwargs):
 
         super(EntityHCNet,self).__init__()
 
@@ -122,6 +122,7 @@ class EntityHCNet(nn.Module):
         self.padding_idx = padding_idx
         self.num_mlp_layers = 2
         self.k_hop = k_hop
+        self.remove_easy_edges = remove_easy_edges
 
         
 
@@ -257,7 +258,7 @@ class EntityHCNet(nn.Module):
         entities_idx = entities_idx.to(edge_list.device)
 
         
-        if self.training:
+        if self.training and self.remove_easy_edges:
             edge_list, rel_list = self.remove_easy_edge(r_idx, entities_idx, edge_list, rel_list)
 
 
