@@ -88,7 +88,8 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
             sampler.set_epoch(epoch)
             for batch in islice(train_loader, batch_per_epoch):
                 batch = tasks.negative_sampling(train_data, batch, cfg.task.num_negative,
-                                                strict=cfg.task.strict_negative)
+                                                strict=cfg.task.strict_negative,
+                                                max_positions_per_edge=cfg.task.get("num_corrupt_positions"))
                 pred = parallel_model(train_data, batch)
                 target = torch.zeros_like(pred)
                 target[:, 0] = 1

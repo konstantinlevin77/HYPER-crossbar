@@ -106,7 +106,8 @@ def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None, b
                 # now at each step we sample a new graph and edges from it
                 train_graph, batch = batch
                 batch = tasks.negative_sampling(train_graph, batch, cfg.task.num_negative,
-                                                strict=cfg.task.strict_negative)
+                                                strict=cfg.task.strict_negative,
+                                                max_positions_per_edge=cfg.task.get("num_corrupt_positions"))
                 pred = parallel_model(train_graph, batch)
                 target = torch.zeros_like(pred)
                 target[:, 0] = 1

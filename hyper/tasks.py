@@ -45,7 +45,7 @@ def edge_match(edge_index, query_index):
     return order[range], num_match
 
 
-def negative_sampling(data, batch, num_negative, strict=True):
+def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_edge=None):
     batch_size = len(batch)
     # Number of nodes in each hyperedge (arity of hyperedges)
     num_nodes_in_edge = batch.size(1) - 1  
@@ -53,6 +53,11 @@ def negative_sampling(data, batch, num_negative, strict=True):
     r_index = batch.t()[-1]  # Shape: (batch_size)
     # Mask indicating non-padding positions (1 if not 0, 0 if 0)
     non_zero_mask = (pos_indices != 0)  # Shape: (num_nodes_in_edge, batch_size)
+    active_positions = torch.nonzero(non_zero_mask.any(dim=1), as_tuple=False).flatten()
+    if max_positions_per_edge is not None and len(active_positions) > max_positions_per_edge:
+        sampled_position_ids = torch.randperm(len(active_positions), device=batch.device)[:max_positions_per_edge]
+        active_positions = active_positions[sampled_position_ids].sort().values
+    active_position_set = set(active_positions.detach().cpu().tolist())
 
 
     # strict negative sampling vs random negative sampling
@@ -62,6 +67,9 @@ def negative_sampling(data, batch, num_negative, strict=True):
 
         neg_indices = []
         for i, mask in enumerate(masks):
+            if i not in active_position_set:
+                neg_indices.append(None)
+                continue
             # Adjust the mask for the current node position
             # Only sample for non-zero positions
             if not non_zero_mask[i].any():  # Skip positions that are all zeros
@@ -102,7 +110,10 @@ def negative_sampling(data, batch, num_negative, strict=True):
     else:
         # Random negative sampling
         neg_indices = []
-        for _ in range(num_nodes_in_edge):
+        for i in range(num_nodes_in_edge):
+            if i not in active_position_set:
+                neg_indices.append(None)
+                continue
             if not non_zero_mask[i].any():  # Skip positions that are all zeros
                 neg_indices.append(None)
                 continue
@@ -112,21 +123,23 @@ def negative_sampling(data, batch, num_negative, strict=True):
     # Prepare positive indices for all nodes
     pos_index_list = []
     # Replace the positive indices with negative samples for each node position
-    for i in range(len([item for item in neg_indices if item is not None])):
+    for i, neg_index in enumerate(neg_indices):
+        if neg_index is None:
+            continue
         # ablate on i-th node
-        pos_index = pos_indices.unsqueeze(-1).repeat(1,1,neg_indices[i].shape[1]+1)  # Shape: ( max_arity, batch_size,num_negative+1)
+        pos_index = pos_indices.unsqueeze(-1).repeat(1,1,neg_index.shape[1]+1)  # Shape: ( max_arity, batch_size,num_negative+1)
             # Replace positive indices at the i-th position with negative samples
 
         # generate a mask of all true with shape of pos_index
         mask = torch.ones_like(pos_index, dtype=torch.bool)
 
         for val in range(batch_size):
-            if neg_indices[i][val][0] == 0:
+            if neg_index[val][0] == 0:
                 mask[i,val] = False
                 
                 continue
             # Clone pos_indices to avoid modifying the original
-            pos_index[i,val,1:] = neg_indices[i][val] # shape of neg_indices[i] is (batch_size, num_negative)
+            pos_index[i,val,1:] = neg_index[val] # shape of neg_index is (batch_size, num_negative)
         
         # propagate_mask
         mask = torch.all(mask[:,:,0],dim = 0)
@@ -271,5 +284,4 @@ def build_weighted_graph(graph):
     return graph
 
   
-
 
