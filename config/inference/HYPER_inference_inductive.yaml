@@ -1,0 +1,48 @@
+output_dir: ~/HYPER/output
+
+dataset:
+  class: {{ dataset }}
+  root: ~/HYPER/kg-datasets/
+  version: {{ version }}
+
+model:
+  class: HYPER
+  relation_model:
+    class: RelHCNet
+    input_dim: 64
+    hidden_dims: [64, 64, 64, 64, 64, 64]
+    aggregate_func:  sum
+    short_cut: yes
+    use_triton: yes
+  entity_model:
+    class: EntityHCNet
+    input_dim: 64
+    hidden_dims: [64, 64, 64, 64, 64, 64]
+    aggregate_func: sum
+    short_cut: yes
+    use_triton: yes
+    remove_easy_edges: no
+
+optimizer:
+  class: AdamW
+  lr: 5.0e-4
+
+task:
+  name: InductiveInference
+  num_negative: 4
+  num_corrupt_positions: 1
+  num_eval_positions: 1
+  strict_negative: yes
+  adversarial_temperature: 1
+  metric: [mr, mrr, hits@1, hits@3, hits@10]
+
+train:
+  gpus: {{ gpus }}
+  batch_size: 1
+  num_epoch: {{ epochs }}
+  log_interval: 100
+  batch_per_epoch: {{ bpe }}
+  num_eval_edges: 100
+  log_train_metrics: false
+
+checkpoint: {{ ckpt }}
