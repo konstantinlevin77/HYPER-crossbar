@@ -29,7 +29,7 @@ optimizer:
 
 task:
   name: InductiveInference
-  num_negative: 4
+  num_negative: 32
   num_corrupt_positions: 1
   num_eval_positions: 1
   strict_negative: yes
@@ -38,11 +38,11 @@ task:
 
 train:
   gpus: {{ gpus }}
-  batch_size: 1
+  batch_size: 8
   num_epoch: {{ epochs }}
   log_interval: 100
   batch_per_epoch: {{ bpe }}
-  num_eval_edges: 100
+  num_eval_edges: 5000
   log_train_metrics: false
 
 checkpoint: {{ ckpt }}
