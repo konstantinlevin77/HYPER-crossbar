@@ -25,7 +25,7 @@ model:
 
 optimizer:
   class: AdamW
-  lr: 1.0e-4
+  lr: 3.0e-4
 
 task:
   name: InductiveInference
@@ -45,7 +45,7 @@ train:
   # Log interval is set to 10, meaning log every 10 batches, test purposes
   log_interval: 10
   batch_per_epoch: {{ bpe }}
-  num_eval_edges: 5000
+  num_eval_edges: 1000
   log_train_metrics: false
 
 checkpoint: {{ ckpt }}
