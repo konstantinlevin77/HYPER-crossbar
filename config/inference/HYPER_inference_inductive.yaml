@@ -25,7 +25,7 @@ model:
 
 optimizer:
   class: AdamW
-  lr: 5.0e-4
+  lr: 1.0e-4
 
 task:
   name: InductiveInference

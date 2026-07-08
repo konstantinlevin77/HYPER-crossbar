@@ -68,6 +68,9 @@ default_finetuning_config = {
     "JFIND": (1, 'null'),
     "WPIND": (1, 'null'),
     "MFBIND": (1, 2000),
+    "HYPERCOMPLIANT150": (1, 1000),
+    "HYPERRULE1": (1, 1000),
+    "HYPERRULE2": (1, 1000),
     # Hypergraph dataset fully inductive (12)
     "JF100": (3, 'null'),
     "JF75": (3, 'null'),
@@ -139,6 +142,9 @@ default_train_config = {
     "JFIND": (20, 'null'),
     "WPIND": (20, 'null'),
     "MFBIND": (4, 10000),
+    "HYPERCOMPLIANT150": (10, 1000),
+    "HYPERRULE1": (10, 1000),
+    "HYPERRULE2": (10, 1000),
     # Hypergraph dataset fully inductive (12)
     "JF100": (10, 'null'),
     "JF75": (10, 'null'),
