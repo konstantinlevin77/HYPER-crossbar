@@ -40,7 +40,10 @@ train:
   gpus: {{ gpus }}
   batch_size: 8
   num_epoch: {{ epochs }}
-  log_interval: 100
+  # Do evaluation after every epoch, test purposes only, to have a denser curve.
+  eval_interval: 1
+  # Log interval is set to 10, meaning log every 10 batches, test purposes
+  log_interval: 10
   batch_per_epoch: {{ bpe }}
   num_eval_edges: 5000
   log_train_metrics: false

@@ -72,14 +72,16 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
     else:
         parallel_model = model
 
-    step = math.ceil(cfg.train.num_epoch / 10)
+    eval_interval = cfg.train.get("eval_interval", math.ceil(cfg.train.num_epoch / 10))
+    if eval_interval <= 0:
+        raise ValueError("cfg.train.eval_interval must be a positive integer")
     best_result = float("-inf")
     best_epoch = -1
 
     batch_id = 0
-    for i in range(0, cfg.train.num_epoch, step):
+    for i in range(0, cfg.train.num_epoch, eval_interval):
         parallel_model.train()
-        for epoch in range(i, min(cfg.train.num_epoch, i + step)):
+        for epoch in range(i, min(cfg.train.num_epoch, i + eval_interval)):
             if util.get_rank() == 0:
                 logger.warning(separator)
                 logger.warning("Epoch %d begin" % epoch)
@@ -128,7 +130,7 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
                 if wandb_logger is not None:
                     wandb_logger.log({"epoch": epoch, "epoch_loss": avg_loss, "train/epoch_loss": avg_loss})
 
-        epoch = min(cfg.train.num_epoch, i + step)
+        epoch = min(cfg.train.num_epoch, i + eval_interval)
         if rank == 0:
             logger.warning("Save checkpoint to model_epoch_%d.pth" % epoch)
             state = {
