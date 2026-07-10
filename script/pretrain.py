@@ -34,9 +34,8 @@ def _wandb_log_metrics(wandb_logger, prefix, metrics, epoch):
         return
 
     payload = {"epoch": epoch}
-    for metric_name in ("mrr", "hits@1", "hits@10"):
-        if metric_name in metrics:
-            payload[f"{prefix}_{metric_name}"] = _metric_value(metrics[metric_name])
+    for metric_name, value in metrics.items():
+        payload[f"{prefix}_{metric_name}"] = _metric_value(value)
     if payload:
         wandb_logger.log(payload)
 
@@ -46,7 +45,38 @@ def _metrics_to_compute(cfg):
     for metric in ("mrr", "hits@1", "hits@10"):
         if metric not in metrics:
             metrics.append(metric)
+    if cfg.task.get("typed_eval", False):
+        for metric in list(metrics):
+            if metric == "mrr" or metric.startswith("hits@"):
+                typed_metric = f"typed_{metric}"
+                if typed_metric not in metrics:
+                    metrics.append(typed_metric)
     return metrics
+
+
+def _score_ranking(metric, ranking, num_negative):
+    if metric.startswith("typed_"):
+        metric = metric[len("typed_"):]
+    if metric == "mr":
+        return ranking.float().mean()
+    if metric == "mrr":
+        return (1 / ranking.float()).mean()
+    if metric.startswith("hits@"):
+        values = metric[5:].split("_")
+        threshold = int(values[0])
+        if len(values) > 1:
+            num_sample = int(values[1])
+            # unbiased estimation
+            fp_rate = (ranking - 1).float() / num_negative
+            score = 0
+            for i in range(threshold):
+                # choose i false positive from num_sample - 1 negatives
+                num_comb = math.factorial(num_sample - 1) / \
+                        math.factorial(i) / math.factorial(num_sample - i - 1)
+                score += num_comb * (fp_rate ** i) * ((1 - fp_rate) ** (num_sample - i - 1))
+            return score.mean()
+        return (ranking <= threshold).float().mean()
+    raise ValueError(f"Unknown metric {metric!r}")
 
 
 def multigraph_collator(batch, train_graphs):
@@ -193,6 +223,7 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
     all_metrics = []
     metric_totals = {}
     num_dataset = 0
+    typed_eval = cfg.task.get("typed_eval", False)
     for test_graph, filters in zip(test_data, filtered_data):
         num_dataset +=1
         test_triplets = torch.cat([test_graph.target_edge_index, test_graph.target_edge_type.unsqueeze(0)]).t()
@@ -204,6 +235,8 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
         model.eval()
         rankings = []
         num_negatives = []
+        typed_rankings = []
+        typed_num_negatives = []
         for batch in test_loader:
             eval_positions = tasks.get_active_positions(batch[:, :-1], cfg.task.get("num_eval_positions"))
             batch_list = tasks.all_negative(test_graph, batch, positions=eval_positions)
@@ -216,14 +249,21 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
                 mask_list = tasks.strict_negative_mask(test_graph, batch, positions=eval_positions)
             else:
                 mask_list = tasks.strict_negative_mask(filters, batch, positions=eval_positions)
+            if typed_eval:
+                typed_mask_source = test_graph if filtered_data is None else filters
+                typed_mask_list = tasks.strict_typed_negative_mask(typed_mask_source, batch, positions=eval_positions)
+            else:
+                typed_mask_list = [None] * len(mask_list)
 
             pos_entities_index_list, pos_r_index = batch.t()[:-1], batch.t()[-1]
     
             ranking_list = []
             num_negative_list = []
+            typed_ranking_list = []
+            typed_num_negative_list = []
 
             # For each arity
-            for pred, mask, pos_entities_index, batch in zip(pred_list, mask_list, pos_entities_index_list, batch_list):
+            for pred, mask, typed_mask, pos_entities_index, batch in zip(pred_list, mask_list, typed_mask_list, pos_entities_index_list, batch_list):
                 if pred is None:
                     continue
                 # Mask out the un-used arity
@@ -235,12 +275,23 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
                 num_negative = mask.sum(dim=-1)
                 ranking_list.append(ranking)
                 num_negative_list.append(num_negative)
+                if typed_eval:
+                    typed_mask = typed_mask[non_zero_mask, 1:]
+                    typed_ranking = tasks.compute_ranking(pred, pos_entities_index, typed_mask)
+                    typed_num_negative = typed_mask.sum(dim=-1)
+                    typed_ranking_list.append(typed_ranking)
+                    typed_num_negative_list.append(typed_num_negative)
             
             rankings += ranking_list
             num_negatives += num_negative_list
+            typed_rankings += typed_ranking_list
+            typed_num_negatives += typed_num_negative_list
 
         ranking = torch.cat(rankings)
         num_negative = torch.cat(num_negatives)
+        if typed_eval:
+            typed_ranking = torch.cat(typed_rankings)
+            typed_num_negative = torch.cat(typed_num_negatives)
         all_size = torch.zeros(world_size, dtype=torch.long, device=device)
         all_size[rank] = len(ranking)
         if world_size > 1:
@@ -250,32 +301,24 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
         all_ranking[cum_size[rank] - all_size[rank]: cum_size[rank]] = ranking
         all_num_negative = torch.zeros(all_size.sum(), dtype=torch.long, device=device)
         all_num_negative[cum_size[rank] - all_size[rank]: cum_size[rank]] = num_negative
+        if typed_eval:
+            all_typed_ranking = torch.zeros(all_size.sum(), dtype=torch.long, device=device)
+            all_typed_ranking[cum_size[rank] - all_size[rank]: cum_size[rank]] = typed_ranking
+            all_typed_num_negative = torch.zeros(all_size.sum(), dtype=torch.long, device=device)
+            all_typed_num_negative[cum_size[rank] - all_size[rank]: cum_size[rank]] = typed_num_negative
         if world_size > 1:
             dist.all_reduce(all_ranking, op=dist.ReduceOp.SUM)
             dist.all_reduce(all_num_negative, op=dist.ReduceOp.SUM)
+            if typed_eval:
+                dist.all_reduce(all_typed_ranking, op=dist.ReduceOp.SUM)
+                dist.all_reduce(all_typed_num_negative, op=dist.ReduceOp.SUM)
 
         if rank == 0:
             for metric in _metrics_to_compute(cfg):
-                if metric == "mr":
-                    score = all_ranking.float().mean()
-                elif metric == "mrr":
-                    score = (1 / all_ranking.float()).mean()
-                elif metric.startswith("hits@"):
-                    values = metric[5:].split("_")
-                    threshold = int(values[0])
-                    if len(values) > 1:
-                        num_sample = int(values[1])
-                        # unbiased estimation
-                        fp_rate = (all_ranking - 1).float() / all_num_negative
-                        score = 0
-                        for i in range(threshold):
-                            # choose i false positive from num_sample - 1 negatives
-                            num_comb = math.factorial(num_sample - 1) / \
-                                    math.factorial(i) / math.factorial(num_sample - i - 1)
-                            score += num_comb * (fp_rate ** i) * ((1 - fp_rate) ** (num_sample - i - 1))
-                        score = score.mean()
-                    else:
-                        score = (all_ranking <= threshold).float().mean()
+                if metric.startswith("typed_"):
+                    score = _score_ranking(metric, all_typed_ranking, all_typed_num_negative)
+                else:
+                    score = _score_ranking(metric, all_ranking, all_num_negative)
                 logger.warning("%s: %g" % (metric, score))
                 metric_totals[metric] = metric_totals.get(metric, 0) + score
                 if neptune_logger is not None:
