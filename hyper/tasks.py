@@ -45,7 +45,29 @@ def edge_match(edge_index, query_index):
     return order[range], num_match
 
 
-def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_edge=None):
+NEGATIVE_SAMPLING_MODES = {"random", "strict_random", "strict_typed"}
+
+
+def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_edge=None,
+                      sampling_mode=None):
+    """Generate random corruptions for a batch of positive hyperedges.
+
+    ``strict`` is retained for backwards compatibility. New configurations should
+    use ``sampling_mode``:
+
+    - ``random`` samples any non-padding entity.
+    - ``strict_random`` also removes replacements that form known true edges.
+    - ``strict_typed`` additionally limits replacements to entities observed in
+      the same position for the same relation.
+    """
+    if sampling_mode is None:
+        sampling_mode = "strict_random" if strict else "random"
+    if sampling_mode not in NEGATIVE_SAMPLING_MODES:
+        raise ValueError(
+            f"Unknown negative sampling mode {sampling_mode!r}. "
+            f"Expected one of {sorted(NEGATIVE_SAMPLING_MODES)}"
+        )
+
     batch_size = len(batch)
     # Number of nodes in each hyperedge (arity of hyperedges)
     num_nodes_in_edge = batch.size(1) - 1  
@@ -60,10 +82,13 @@ def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_
     active_position_set = set(active_positions.detach().cpu().tolist())
 
 
-    # strict negative sampling vs random negative sampling
-    if strict:
+    # strict random / strict typed negative sampling vs unfiltered random sampling
+    if sampling_mode in {"strict_random", "strict_typed"}:
         # Generate masks for each node position in the hyperedge
-        masks = strict_negative_mask(data, batch, positions=active_positions)  # Returns a list of masks
+        if sampling_mode == "strict_typed":
+            masks = strict_typed_negative_mask(data, batch, positions=active_positions)
+        else:
+            masks = strict_negative_mask(data, batch, positions=active_positions)
 
         neg_indices = []
         for i, mask in enumerate(masks):
@@ -83,10 +108,7 @@ def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_
             num_candidate = current_mask.sum(dim=-1)
 
 
-            valid_mask = num_candidate > 0  # Shape: [8]
-
-            # Expand the mask to match the shape of the indexed tensor
-            valid_mask = valid_mask.unsqueeze(-1).expand(-1, num_negative)  # Shape: [8, num_negative]
+            valid_rows = num_candidate > 0  # Shape: [batch_size]
 
             # Step 1: Generate random numbers
             rand = torch.rand(len(current_mask), num_negative, device=batch.device)  # Shape: [8, num_negative]
@@ -100,12 +122,14 @@ def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_
             # Add offsets
             index = scaled_rand + offsets
 
-            # Step 4: Mask out invalid rows
-            index[~valid_mask] = 0  # Rows with no candidates are set to 0 (or any other placeholder)
-
-            
-            # Map sampled indices back to candidate set
-            neg_index = neg_candidate[index]
+            # Map sampled indices back to the candidate set. Keep exhausted rows
+            # at padding ID 0 so the assembly step below removes them. Indexing
+            # only valid rows also handles the case where every pool is empty.
+            neg_index = torch.zeros(
+                len(current_mask), num_negative, dtype=torch.long, device=batch.device
+            )
+            if valid_rows.any():
+                neg_index[valid_rows] = neg_candidate[index[valid_rows]]
             neg_indices.append(neg_index)
     else:
         # Random negative sampling
@@ -117,7 +141,8 @@ def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_
             if not non_zero_mask[i].any():  # Skip positions that are all zeros
                 neg_indices.append(None)
                 continue
-            neg_index = torch.randint(data.num_nodes, (batch_size, num_negative), device=batch.device)
+            # Entity 0 is reserved for padding and must never be sampled.
+            neg_index = torch.randint(1, data.num_nodes, (batch_size, num_negative), device=batch.device)
             neg_indices.append(neg_index)
 
     # Prepare positive indices for all nodes
@@ -151,6 +176,17 @@ def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_
         pos_index_list.append(stack_temp)
     negative_samples = torch.concat(pos_index_list, dim=1)  # (max_arity, new_batch_size, num_negative+1)
     return negative_samples # (max_arity+1, new_batch_size, num_negative+1)
+
+
+def strict_typed_negative_sampling(data, batch, num_negative, max_positions_per_edge=None):
+    """Convenience entry point for strict, relation-and-position typed sampling."""
+    return negative_sampling(
+        data,
+        batch,
+        num_negative,
+        max_positions_per_edge=max_positions_per_edge,
+        sampling_mode="strict_typed",
+    )
 
 
 
@@ -228,7 +264,57 @@ def strict_negative_mask(data, batch, positions=None):
         mask = torch.ones(len(num_i_truth), data.num_nodes, dtype=torch.bool, device=batch.device)
         mask[sample_id, i_truth_index] = 0
         mask.scatter_(1, pos_indices[i].unsqueeze(-1), 0)
+        mask[:, 0] = 0  # Entity 0 is padding, not a valid negative.
         masks.append(mask)
+    return masks
+
+
+def strict_typed_negative_mask(data, batch, positions=None):
+    """Return strict masks restricted by relation-specific positional types.
+
+    For a query with relation ``r`` whose position ``i`` is corrupted, candidates
+    are entities that occur at position ``i`` in a positive edge with relation ``r``.
+    Known true completions and the positive entity are still excluded by the
+    ordinary strict mask.
+    """
+    num_nodes_in_edge = batch.size(1) - 1
+    relation_index = batch[:, -1]
+    strict_masks = strict_negative_mask(data, batch, positions=positions)
+    # Prefer training targets because they describe the complete positive type
+    # signature. Fall back to graph facts for data objects without target fields.
+    type_edge_index = getattr(data, "target_edge_index", data.edge_index)
+    type_edge_type = getattr(data, "target_edge_type", data.edge_type)
+    candidate_cache = getattr(data, "_strict_typed_candidate_cache", {})
+
+    if positions is None:
+        positions = torch.arange(num_nodes_in_edge, device=batch.device)
+    position_set = set(positions.detach().cpu().tolist())
+
+    masks = []
+    for i in range(num_nodes_in_edge):
+        if i not in position_set:
+            masks.append(None)
+            continue
+
+        typed_mask = torch.zeros(
+            len(batch), data.num_nodes, dtype=torch.bool, device=batch.device
+        )
+        for relation in relation_index.unique():
+            batch_rows = torch.nonzero(relation_index == relation, as_tuple=False).flatten()
+            cache_key = (str(batch.device), i, int(relation.item()))
+            typed_candidates = candidate_cache.get(cache_key)
+            if typed_candidates is None:
+                relation_edges = type_edge_type == relation
+                typed_candidates = type_edge_index[i, relation_edges].unique()
+                typed_candidates = typed_candidates[typed_candidates != 0]
+                candidate_cache[cache_key] = typed_candidates
+            if len(typed_candidates) > 0:
+                typed_mask[
+                    batch_rows.unsqueeze(1), typed_candidates.unsqueeze(0)
+                ] = True
+
+        masks.append(strict_masks[i] & typed_mask)
+    data._strict_typed_candidate_cache = candidate_cache
     return masks
 
 

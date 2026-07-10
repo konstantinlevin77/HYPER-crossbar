@@ -172,6 +172,17 @@ Arguments:
 
 Hypergraph tensors are padded to `max_arity` with 0s; first column stores relation id.
 
+Training configs select a negative sampler under `task`:
+
+```yaml
+negative_sampling: strict_typed
+```
+
+Available modes are `random`, `strict_random`, and `strict_typed`. The typed mode
+first removes known true completions, then samples only entities observed at the
+same hyperedge position for the same relation. Entity `0` is always excluded
+because it is reserved for padding.
+
 ---
 
 ## Pre-Training
