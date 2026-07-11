@@ -183,6 +183,16 @@ first removes known true completions, then samples only entities observed at the
 same hyperedge position for the same relation. Entity `0` is always excluded
 because it is reserved for padding.
 
+For HYPER-RULE1 and HYPER-RULE2, per-node-type typed metrics can be enabled with:
+
+```yaml
+node_specific_typed_evaluation: yes
+```
+
+This reports MRR and Hits@1/3/10 under `typed/{node_type}/{metric}` for the fixed
+`disease`, `gene`, `drug`, and `pathway` positions. It also reports the evaluated
+count for each node type.
+
 ---
 
 ## Pre-Training

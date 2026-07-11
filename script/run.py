@@ -12,7 +12,7 @@ from torch.utils import data as torch_data
 from torch_geometric.data import Data
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from hyper import tasks, util
+from hyper import evaluation, tasks, util
 from hyper.models import HYPER, TransductiveHCNet
 
 
@@ -208,7 +208,10 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
     model.eval()
     rankings = []
     num_negatives = []
-    typed_eval = cfg.task.get("typed_eval", False)
+    node_specific_typed_eval = cfg.task.get("node_specific_typed_evaluation", False)
+    typed_eval = cfg.task.get("typed_eval", False) or node_specific_typed_eval
+    node_types = evaluation.node_types_for_dataset(cfg.dataset["class"])
+    position_typed_rankings = evaluation.new_position_rankings()
     typed_rankings = []
     typed_num_negatives = []
     for batch in test_loader:
@@ -235,7 +238,7 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
         typed_num_negative_list = []
         # For each arity
         arity_pos = 0
-        for pred, mask, typed_mask, pos_entities_index, batch in zip(pred_list, mask_list, typed_mask_list, pos_entities_index_list, batch_list):
+        for position, (pred, mask, typed_mask, pos_entities_index, batch) in enumerate(zip(pred_list, mask_list, typed_mask_list, pos_entities_index_list, batch_list)):
             if pred is None:
                 continue
             # Mask out the un-used arity
@@ -253,6 +256,8 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
                 typed_num_negative = typed_mask.sum(dim=-1)
                 typed_ranking_list.append(typed_ranking)
                 typed_num_negative_list.append(typed_num_negative)
+                if node_specific_typed_eval:
+                    evaluation.add_position_rankings(position_typed_rankings, position, typed_ranking)
             arity_pos += 1
         
         rankings += ranking_list
@@ -281,6 +286,10 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
         all_typed_num_negative[cum_size[rank] - all_size[rank]: cum_size[rank]] = typed_num_negative
 
     metrics = {}
+    if node_specific_typed_eval:
+        if node_types is None and rank == 0:
+            logger.warning("Node-specific typed evaluation is not defined for dataset %s", cfg.dataset["class"])
+        metrics.update(evaluation.node_specific_typed_metrics(position_typed_rankings, node_types, device))
     if rank == 0:
         for metric in _metrics_to_compute(cfg):
             if metric.startswith("typed_"):
@@ -291,6 +300,11 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
                 neptune_logger[f"{logger_mode}/{metric}"]=score
             logger.warning("%s: %g" % (metric, score))
             metrics[metric] = score
+        for metric, score in metrics.items():
+            if metric.startswith("typed/"):
+                if neptune_logger is not None:
+                    neptune_logger[f"{logger_mode}/{metric}"] = score
+                logger.warning("%s: %g" % (metric, score))
     mrr = (1 / all_ranking.float()).mean()
 
     if return_metrics and "mrr" not in metrics:
@@ -379,10 +393,14 @@ if __name__ == "__main__":
     if util.get_rank() == 0:
         logger.warning(separator)
         logger.warning("Evaluate on valid")
-    test(cfg, model, valid_data, filtered_data=val_filtered_data, device=device, logger=logger, neptune_logger=neptune_logger, logger_mode = "valid")
+    valid_metrics = test(cfg, model, valid_data, filtered_data=val_filtered_data, device=device, logger=logger, neptune_logger=neptune_logger, logger_mode="valid", return_metrics=True)
+    if util.get_rank() == 0:
+        _wandb_log_metrics(wandb_logger, "valid", valid_metrics, cfg.train.num_epoch)
     if util.get_rank() == 0:
         logger.warning(separator)
         logger.warning("Evaluate on test")
-    test(cfg, model, test_data, filtered_data=test_filtered_data, device=device, logger=logger, neptune_logger=neptune_logger, logger_mode = "test")
+    test_metrics = test(cfg, model, test_data, filtered_data=test_filtered_data, device=device, logger=logger, neptune_logger=neptune_logger, logger_mode="test", return_metrics=True)
+    if util.get_rank() == 0:
+        _wandb_log_metrics(wandb_logger, "test", test_metrics, cfg.train.num_epoch)
     if util.get_rank() == 0:
         util.finish_wandb_run(wandb_logger)

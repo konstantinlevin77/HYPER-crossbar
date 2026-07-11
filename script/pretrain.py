@@ -15,7 +15,7 @@ from torch.utils import data as torch_data
 from torch_geometric.data import Data
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from hyper import tasks, util
+from hyper import evaluation, tasks, util
 from hyper.models import HYPER, TransductiveHCNet
 
 
@@ -223,7 +223,11 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
     all_metrics = []
     metric_totals = {}
     num_dataset = 0
-    typed_eval = cfg.task.get("typed_eval", False)
+    node_specific_typed_eval = cfg.task.get("node_specific_typed_evaluation", False)
+    typed_eval = cfg.task.get("typed_eval", False) or node_specific_typed_eval
+    graph_names = cfg.dataset.get("graphs", [])
+    node_metric_totals = {}
+    node_metric_counts = {}
     for test_graph, filters in zip(test_data, filtered_data):
         num_dataset +=1
         test_triplets = torch.cat([test_graph.target_edge_index, test_graph.target_edge_type.unsqueeze(0)]).t()
@@ -237,6 +241,7 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
         num_negatives = []
         typed_rankings = []
         typed_num_negatives = []
+        position_typed_rankings = evaluation.new_position_rankings()
         for batch in test_loader:
             eval_positions = tasks.get_active_positions(batch[:, :-1], cfg.task.get("num_eval_positions"))
             batch_list = tasks.all_negative(test_graph, batch, positions=eval_positions)
@@ -263,7 +268,7 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
             typed_num_negative_list = []
 
             # For each arity
-            for pred, mask, typed_mask, pos_entities_index, batch in zip(pred_list, mask_list, typed_mask_list, pos_entities_index_list, batch_list):
+            for position, (pred, mask, typed_mask, pos_entities_index, batch) in enumerate(zip(pred_list, mask_list, typed_mask_list, pos_entities_index_list, batch_list)):
                 if pred is None:
                     continue
                 # Mask out the un-used arity
@@ -281,6 +286,8 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
                     typed_num_negative = typed_mask.sum(dim=-1)
                     typed_ranking_list.append(typed_ranking)
                     typed_num_negative_list.append(typed_num_negative)
+                    if node_specific_typed_eval:
+                        evaluation.add_position_rankings(position_typed_rankings, position, typed_ranking)
             
             rankings += ranking_list
             num_negatives += num_negative_list
@@ -323,6 +330,19 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
                 metric_totals[metric] = metric_totals.get(metric, 0) + score
                 if neptune_logger is not None:
                     neptune_logger[f"{logger_mode}/{num_dataset}/{metric}"] = score
+        if node_specific_typed_eval:
+            graph_name = graph_names[num_dataset - 1] if num_dataset <= len(graph_names) else None
+            node_types = evaluation.node_types_for_dataset(graph_name)
+            node_metrics = evaluation.node_specific_typed_metrics(position_typed_rankings, node_types, device)
+            if node_types is None and rank == 0:
+                logger.warning("Node-specific typed evaluation is not defined for dataset %s", graph_name)
+            if rank == 0:
+                for metric, score in node_metrics.items():
+                    logger.warning("%s: %g" % (metric, score))
+                    if neptune_logger is not None:
+                        neptune_logger[f"{logger_mode}/{num_dataset}/{metric}"] = score
+                    node_metric_totals[metric] = node_metric_totals.get(metric, 0) + score
+                    node_metric_counts[metric] = node_metric_counts.get(metric, 0) + 1
         mrr = (1 / all_ranking.float()).mean()
 
         all_metrics.append(mrr)
@@ -334,6 +354,10 @@ def test(cfg, model, test_data, filtered_data=None, neptune_logger=None, logger_
         averaged_metrics = {}
         if rank == 0:
             averaged_metrics = {name: value / num_dataset for name, value in metric_totals.items()}
+            averaged_metrics.update({
+                name: value / node_metric_counts[name]
+                for name, value in node_metric_totals.items()
+            })
         if "mrr" not in averaged_metrics:
             averaged_metrics["mrr"] = avg_metric
         return averaged_metrics
@@ -414,10 +438,14 @@ if __name__ == "__main__":
     if util.get_rank() == 0:
         logger.warning(separator)
         logger.warning("Evaluate on valid")
-    test(cfg, model, valid_data, filtered_data=filtered_data,neptune_logger=neptune_logger, logger_mode = "valid")
+    valid_metrics = test(cfg, model, valid_data, filtered_data=filtered_data, neptune_logger=neptune_logger, logger_mode="valid", return_metrics=True)
+    if util.get_rank() == 0:
+        _wandb_log_metrics(wandb_logger, "valid", valid_metrics, cfg.train.num_epoch)
     if util.get_rank() == 0:
         logger.warning(separator)
         logger.warning("Evaluate on test")
-    test(cfg, model, test_data, filtered_data=filtered_data,neptune_logger=neptune_logger, logger_mode = "test")
+    test_metrics = test(cfg, model, test_data, filtered_data=filtered_data, neptune_logger=neptune_logger, logger_mode="test", return_metrics=True)
+    if util.get_rank() == 0:
+        _wandb_log_metrics(wandb_logger, "test", test_metrics, cfg.train.num_epoch)
     if util.get_rank() == 0:
         util.finish_wandb_run(wandb_logger)
