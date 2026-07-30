@@ -307,7 +307,7 @@ if __name__ == "__main__":
                 logger.warning("Evaluate on test")
             metrics = test(cfg, model, test_data, filtered_data=test_filtered_data, return_metrics=True, device=device, logger=logger, neptune_logger=neptune_logger,logger_mode="test")
 
-            metrics = {k:v.item() for k,v in metrics.items()}
+            metrics = {k: v.item() if torch.is_tensor(v) else v for k, v in metrics.items()}
             metrics['dataset'] = graph
             # write to the log file
             with open(results_file, "a", newline='') as csv_file:

@@ -33,7 +33,13 @@ def _wandb_log_metrics(wandb_logger, prefix, metrics, epoch):
 
     payload = {"epoch": epoch}
     for metric_name, value in metrics.items():
-        payload[f"{prefix}_{metric_name}"] = _metric_value(value)
+        if metric_name.startswith("typed/"):
+            # Keep node-specific metrics together in W&B under valid/typed/...
+            # or test/typed/... while preserving legacy keys for old metrics.
+            key = f"{prefix}/{metric_name}"
+        else:
+            key = f"{prefix}_{metric_name}"
+        payload[key] = _metric_value(value)
     if payload:
         wandb_logger.log(payload)
 
