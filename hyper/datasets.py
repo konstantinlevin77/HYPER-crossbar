@@ -242,6 +242,12 @@ def HYPERRULE1(root, device, version=None):
 def HYPERRULE2(root, device, version=None):
     return build_hypergraph_dataset(root, device, name="HYPER-RULE2", alternative_build=True)
 
+def HYPERRULE1_STF(root, device, version=None):
+    return build_hypergraph_dataset(root, device, name="HYPER-RULE1_STF", alternative_build=True)
+
+def HYPERRULE2_STF(root, device, version=None):
+    return build_hypergraph_dataset(root, device, name="HYPER-RULE2_STF", alternative_build=True)
+
 def JFIND(root,device, version=None):
     return build_hypergraph_dataset(root, device, name="JF-IND", inductive_dataset = True)
 

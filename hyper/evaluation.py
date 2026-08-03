@@ -12,6 +12,10 @@ RULE_NODE_TYPES = {
     "HYPERRULE2": ("disease", "gene", "drug", "pathway"),
     "HYPER-RULE1": ("disease", "gene", "drug", "pathway"),
     "HYPER-RULE2": ("disease", "gene", "drug", "pathway"),
+    "HYPERRULE1_STF": ("disease", "gene", "drug", "pathway"),
+    "HYPER-RULE1_STF": ("disease", "gene", "drug", "pathway"),
+    "HYPERRULE2_STF": ("disease", "gene", "drug", "pathway"),
+    "HYPER-RULE2_STF": ("disease", "gene", "drug", "pathway"),
 }
 
 
