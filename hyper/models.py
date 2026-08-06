@@ -259,7 +259,9 @@ class EntityHCNet(nn.Module):
 
         
         if self.training and self.remove_easy_edges:
-            edge_list, rel_list = self.remove_easy_edge(r_idx, entities_idx, edge_list, rel_list)
+            edge_list, rel_list = self.remove_easy_edge(
+                data, r_idx, entities_idx, edge_list, rel_list
+            )
         if self.transductive_hcnet:
             relation_representations = None
         else:
@@ -271,15 +273,13 @@ class EntityHCNet(nn.Module):
         return score
     
     
-    def remove_easy_edge(self, r_idx, entities_idx, edge_list, rel_list):
-
-        # Remove the easy edges to reduce overfitting. Actually important for model to generalize
-        
-        # Initialize an empty mask with the same size as the edge list
-        all_edge_rel = torch.cat([edge_list, rel_list.unsqueeze(-1)], dim=-1)
+    def remove_easy_edge(self, data, r_idx, entities_idx, edge_list, rel_list):
+        # Remove batch facts from the message-passing graph to prevent leakage.
+        # The graph lookup is static even though the removal mask is batch-specific.
         easy_edge = torch.cat([entities_idx, r_idx.unsqueeze(-1)], dim=-1).flatten(0,1)
-        all_edge_rel, easy_edge = all_edge_rel.transpose(0,1), easy_edge.transpose(0,1)
-        index = tasks.edge_match(all_edge_rel, easy_edge)[0]
+        easy_edge = easy_edge.transpose(0,1)
+        prepared = tasks.get_graph_edge_match_index(data)
+        index = tasks.edge_match_prepared(prepared, easy_edge)[0]
         remove_mask = ~self.index_to_mask(index, len(edge_list))
         
         # Filter out the edges that are to be removed

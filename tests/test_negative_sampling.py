@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 import sys
 import types
 
@@ -15,6 +16,73 @@ except ImportError:
     sys.modules["torch_scatter"] = torch_scatter
 
 from hyper import tasks
+
+
+class PreparedEdgeMatchTest(unittest.TestCase):
+    def setUp(self):
+        self.data = Data(
+            edge_index=torch.tensor([
+                [1, 1, 2, 3],
+                [2, 2, 3, 1],
+            ]),
+            edge_type=torch.tensor([0, 0, 1, 1]),
+            num_nodes=4,
+        )
+
+    def test_prepared_lookup_preserves_duplicates_and_missing_queries(self):
+        query_index = torch.tensor([
+            [1, 2, 3],
+            [2, 3, 3],
+            [0, 1, 0],
+        ])
+
+        edge_ids, counts = tasks.edge_match_prepared(
+            tasks.get_graph_edge_match_index(self.data), query_index
+        )
+
+        self.assertEqual(counts.tolist(), [2, 1, 0])
+        self.assertEqual(edge_ids.tolist(), [0, 1, 2])
+
+    def test_graph_cache_reuses_each_logical_index(self):
+        full = tasks.get_graph_edge_match_index(self.data)
+        without_first = tasks.get_graph_edge_match_index(
+            self.data, excluded_position=0
+        )
+
+        self.assertIs(full, tasks.get_graph_edge_match_index(self.data))
+        self.assertIs(
+            without_first,
+            tasks.get_graph_edge_match_index(self.data, excluded_position=0),
+        )
+        self.assertIsNot(
+            without_first,
+            tasks.get_graph_edge_match_index(self.data, excluded_position=1),
+        )
+        self.assertNotIn("_edge_match_cache", self.data.keys())
+
+    def test_graph_cache_is_invalidated_after_in_place_mutation(self):
+        original = tasks.get_graph_edge_match_index(
+            self.data, excluded_position=0
+        )
+        self.data.edge_index[0, 0] = 3
+
+        rebuilt = tasks.get_graph_edge_match_index(
+            self.data, excluded_position=0
+        )
+
+        self.assertIsNot(original, rebuilt)
+
+    def test_strict_mask_prepares_a_position_only_once(self):
+        batch = torch.tensor([[1, 2, 0]])
+        positions = torch.tensor([0])
+
+        with mock.patch.object(
+            tasks, "prepare_edge_match", wraps=tasks.prepare_edge_match
+        ) as prepare:
+            tasks.strict_negative_mask(self.data, batch, positions=positions)
+            tasks.strict_negative_mask(self.data, batch, positions=positions)
+
+        self.assertEqual(prepare.call_count, 1)
 
 
 class StrictTypedNegativeSamplingTest(unittest.TestCase):

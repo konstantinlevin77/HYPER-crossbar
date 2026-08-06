@@ -1,4 +1,5 @@
-from functools import reduce
+from dataclasses import dataclass
+
 from torch_scatter import scatter_add
 from torch_geometric.data import Data
 import torch
@@ -10,11 +11,21 @@ def forward_mapping(i,j):
     if i < j: return (j+1)**2 - 2*(j-i)
 
 
-def edge_match(edge_index, query_index):
-    # O((n + q)logn) time
-    # O(n) memory
-    # edge_index: big underlying graph
-    # query_index: edges to match
+@dataclass(frozen=True)
+class PreparedEdgeMatch:
+    """Static lookup state for repeatedly matching queries against one edge set."""
+
+    scale: torch.Tensor
+    sorted_hash: torch.Tensor
+    order: torch.Tensor
+
+
+def prepare_edge_match(edge_index):
+    """Hash and sort a static edge index once for repeated matching."""
+    if edge_index.dim() != 2:
+        raise ValueError("edge_index must be a 2D tensor")
+    if edge_index.size(1) == 0:
+        raise ValueError("edge_index must contain at least one edge")
 
     # preparing unique hashing of edges, base: (max_node, max_relation) + 1
     base = edge_index.max(dim=1)[0] + 1
@@ -26,23 +37,111 @@ def edge_match(edge_index, query_index):
     scale = base.cumprod(0)
     scale = scale[-1] // scale
 
-    # hash both the original edge index and the query index to unique integers
+    # Hash and sort the static edge set. These are the O(n log n) operations
+    # that should not be repeated for every training batch.
     edge_hash = (edge_index * scale.unsqueeze(-1)).sum(dim=0)
-    edge_hash, order = edge_hash.sort()
-    query_hash = (query_index * scale.unsqueeze(-1)).sum(dim=0)
+    sorted_hash, order = edge_hash.sort()
+    return PreparedEdgeMatch(scale=scale, sorted_hash=sorted_hash, order=order)
+
+
+def edge_match_prepared(prepared, query_index):
+    """Match changing queries against a lookup produced by ``prepare_edge_match``."""
+    if query_index.dim() != 2:
+        raise ValueError("query_index must be a 2D tensor")
+    if query_index.size(0) != prepared.scale.numel():
+        raise ValueError(
+            "query_index and prepared edge index must have the same number of rows"
+        )
+    if query_index.device != prepared.sorted_hash.device:
+        raise ValueError("query_index and prepared edge index must be on the same device")
+
+    query_hash = (query_index * prepared.scale.unsqueeze(-1)).sum(dim=0)
 
     # matched ranges: [start[i], end[i])
-    start = torch.bucketize(query_hash, edge_hash)
-    end = torch.bucketize(query_hash, edge_hash, right=True)
+    start = torch.bucketize(query_hash, prepared.sorted_hash)
+    end = torch.bucketize(query_hash, prepared.sorted_hash, right=True)
     # num_match shows how many edges satisfy the (h, r) pattern for each query in the batch
     num_match = end - start
 
     # generate the corresponding ranges
     offset = num_match.cumsum(0) - num_match
-    range = torch.arange(num_match.sum(), device=edge_index.device)
-    range = range + (start - offset).repeat_interleave(num_match)
+    match_range = torch.arange(num_match.sum(), device=query_index.device)
+    match_range = match_range + (start - offset).repeat_interleave(num_match)
 
-    return order[range], num_match
+    return prepared.order[match_range], num_match
+
+
+def edge_match(edge_index, query_index):
+    """Match queries against an edge set without retaining a reusable index."""
+    return edge_match_prepared(prepare_edge_match(edge_index), query_index)
+
+
+def _graph_edge_match_signature(graph):
+    """Identify the graph tensor storage and detect in-place mutations."""
+    edge_index = graph.edge_index
+    edge_type = graph.edge_type
+
+    def tensor_version(tensor):
+        try:
+            return tensor._version
+        except RuntimeError:
+            # Tensors created under inference mode do not expose a version
+            # counter. Storage identity and shape still detect replacement.
+            return None
+
+    return (
+        edge_index.device,
+        tuple(edge_index.shape),
+        edge_index.data_ptr(),
+        tensor_version(edge_index),
+        edge_type.device,
+        tuple(edge_type.shape),
+        edge_type.data_ptr(),
+        tensor_version(edge_type),
+    )
+
+
+def get_graph_edge_match_index(graph, excluded_position=None):
+    """Return a cached lookup for a graph's full or position-projected edges.
+
+    With ``excluded_position=None``, the indexed tuples contain every entity
+    position followed by the relation. Otherwise the selected entity position
+    is omitted, which is the lookup used by strict negative sampling.
+    """
+    num_positions = graph.edge_index.size(0)
+    if excluded_position is not None and not 0 <= excluded_position < num_positions:
+        raise ValueError(
+            f"excluded_position must be between 0 and {num_positions - 1}"
+        )
+
+    signature = _graph_edge_match_signature(graph)
+    # Keep runtime-only indexes outside PyG's feature store so they are not
+    # collated, serialized, or traversed by ``Data.to()``.
+    cache = graph.__dict__.get("_edge_match_cache")
+    if cache is None or cache.get("signature") != signature:
+        cache = {"signature": signature, "indices": {}}
+        object.__setattr__(graph, "_edge_match_cache", cache)
+
+    cache_key = ("full",) if excluded_position is None else ("without", excluded_position)
+    prepared = cache["indices"].get(cache_key)
+    if prepared is None:
+        if excluded_position is None:
+            match_edge_index = torch.cat(
+                [graph.edge_index, graph.edge_type.unsqueeze(0)], dim=0
+            )
+        else:
+            retained_positions = [
+                position for position in range(num_positions)
+                if position != excluded_position
+            ]
+            match_edge_index = torch.cat(
+                [graph.edge_index[retained_positions], graph.edge_type.unsqueeze(0)],
+                dim=0,
+            )
+        prepared = prepare_edge_match(match_edge_index)
+        cache["indices"][cache_key] = prepared
+
+    return prepared
 
 
 NEGATIVE_SAMPLING_MODES = {"random", "strict_random", "strict_typed"}
@@ -280,11 +379,13 @@ def strict_negative_mask(data, batch, positions=None):
         if i not in position_set:
             masks.append(None)
             continue
-        edge_other_indices = data.edge_index[torch.arange(num_nodes_in_edge) != i]
-        edge_index = torch.cat([edge_other_indices, data.edge_type.unsqueeze(0)],dim=0)
-        query_index = pos_indices[torch.arange(num_nodes_in_edge) != i]  # Shape: (k-1, batch_size)
+        retained_positions = [
+            position for position in range(num_nodes_in_edge) if position != i
+        ]
+        query_index = pos_indices[retained_positions]  # Shape: (k-1, batch_size)
         query_index = torch.cat([query_index, r_index.unsqueeze(0)], dim=0)  # Shape: (k, batch_size)
-        edge_id, num_i_truth = edge_match(edge_index, query_index)
+        prepared = get_graph_edge_match_index(data, excluded_position=i)
+        edge_id, num_i_truth = edge_match_prepared(prepared, query_index)
         i_truth_index = data.edge_index[i, edge_id]
         sample_id = torch.arange(len(num_i_truth), device=batch.device).repeat_interleave(num_i_truth)
         mask = torch.ones(len(num_i_truth), data.num_nodes, dtype=torch.bool, device=batch.device)
