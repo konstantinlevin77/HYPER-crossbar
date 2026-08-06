@@ -260,9 +260,6 @@ class EntityHCNet(nn.Module):
         
         if self.training and self.remove_easy_edges:
             edge_list, rel_list = self.remove_easy_edge(r_idx, entities_idx, edge_list, rel_list)
-
-
-            data = tasks.build_weighted_graph(data)
         if self.transductive_hcnet:
             relation_representations = None
         else:
