@@ -23,6 +23,9 @@ optimizer:
 task:
   name: InductiveInference
   num_negative: 256
+  # Disease is position 0 and remains fixed as the stratification context.
+  corrupt_positions: [1, 2, 3]
+  eval_positions: [1, 2, 3]
   negative_sampling: strict_typed
   typed_eval: yes
   node_specific_typed_evaluation: no

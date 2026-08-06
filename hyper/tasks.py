@@ -49,7 +49,7 @@ NEGATIVE_SAMPLING_MODES = {"random", "strict_random", "strict_typed"}
 
 
 def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_edge=None,
-                      sampling_mode=None):
+                      sampling_mode=None, corrupt_positions=None):
     """Generate random corruptions for a batch of positive hyperedges.
 
     ``strict`` is retained for backwards compatibility. New configurations should
@@ -59,6 +59,10 @@ def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_
     - ``strict_random`` also removes replacements that form known true edges.
     - ``strict_typed`` additionally limits replacements to entities observed in
       the same position for the same relation.
+
+    ``corrupt_positions`` optionally restricts corruption to the listed,
+    zero-based entity positions. The relation column is not included in this
+    numbering.
     """
     if sampling_mode is None:
         sampling_mode = "strict_random" if strict else "random"
@@ -75,10 +79,11 @@ def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_
     r_index = batch.t()[-1]  # Shape: (batch_size)
     # Mask indicating non-padding positions (1 if not 0, 0 if 0)
     non_zero_mask = (pos_indices != 0)  # Shape: (num_nodes_in_edge, batch_size)
-    active_positions = torch.nonzero(non_zero_mask.any(dim=1), as_tuple=False).flatten()
-    if max_positions_per_edge is not None and len(active_positions) > max_positions_per_edge:
-        sampled_position_ids = torch.randperm(len(active_positions), device=batch.device)[:max_positions_per_edge]
-        active_positions = active_positions[sampled_position_ids].sort().values
+    active_positions = get_active_positions(
+        batch[:, :-1],
+        max_positions_per_edge=max_positions_per_edge,
+        allowed_positions=corrupt_positions,
+    )
     active_position_set = set(active_positions.detach().cpu().tolist())
 
 
@@ -178,7 +183,8 @@ def negative_sampling(data, batch, num_negative, strict=True, max_positions_per_
     return negative_samples # (max_arity+1, new_batch_size, num_negative+1)
 
 
-def strict_typed_negative_sampling(data, batch, num_negative, max_positions_per_edge=None):
+def strict_typed_negative_sampling(data, batch, num_negative, max_positions_per_edge=None,
+                                   corrupt_positions=None):
     """Convenience entry point for strict, relation-and-position typed sampling."""
     return negative_sampling(
         data,
@@ -186,12 +192,32 @@ def strict_typed_negative_sampling(data, batch, num_negative, max_positions_per_
         num_negative,
         max_positions_per_edge=max_positions_per_edge,
         sampling_mode="strict_typed",
+        corrupt_positions=corrupt_positions,
     )
 
 
 
-def get_active_positions(pos_indices, max_positions_per_edge=None):
+def get_active_positions(pos_indices, max_positions_per_edge=None, allowed_positions=None):
+    """Return non-padding positions, optionally restricted to an allowlist."""
     active_positions = torch.nonzero(pos_indices.T.any(dim=1), as_tuple=False).flatten()
+    if allowed_positions is not None:
+        allowed_positions = torch.as_tensor(allowed_positions, device=pos_indices.device)
+        if allowed_positions.ndim != 1:
+            raise ValueError("allowed positions must be a one-dimensional sequence")
+        if allowed_positions.is_floating_point() and not torch.equal(
+            allowed_positions, allowed_positions.long().to(allowed_positions.dtype)
+        ):
+            raise ValueError("allowed positions must contain integers")
+        allowed_positions = allowed_positions.long()
+        if torch.any(allowed_positions < 0) or torch.any(allowed_positions >= pos_indices.size(1)):
+            raise ValueError(
+                f"allowed positions must be between 0 and {pos_indices.size(1) - 1}"
+            )
+        active_positions = active_positions[
+            torch.isin(active_positions, allowed_positions)
+        ]
+        if len(active_positions) == 0:
+            raise ValueError("no active entity positions remain after applying the position allowlist")
     if max_positions_per_edge is not None and len(active_positions) > max_positions_per_edge:
         sampled_position_ids = torch.randperm(len(active_positions), device=pos_indices.device)[:max_positions_per_edge]
         active_positions = active_positions[sampled_position_ids].sort().values

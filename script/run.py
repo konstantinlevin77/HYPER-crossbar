@@ -128,7 +128,8 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
                 batch = tasks.negative_sampling(train_data, batch, cfg.task.num_negative,
                                                 strict=cfg.task.get("strict_negative", True),
                                                 max_positions_per_edge=cfg.task.get("num_corrupt_positions"),
-                                                sampling_mode=cfg.task.get("negative_sampling"))
+                                                sampling_mode=cfg.task.get("negative_sampling"),
+                                                corrupt_positions=cfg.task.get("corrupt_positions"))
                 pred = parallel_model(train_data, batch)
                 target = torch.zeros_like(pred)
                 target[:, 0] = 1
@@ -221,7 +222,13 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
     typed_rankings = []
     typed_num_negatives = []
     for batch in test_loader:
-        eval_positions = tasks.get_active_positions(batch[:, :-1], cfg.task.get("num_eval_positions"))
+        eval_positions = tasks.get_active_positions(
+            batch[:, :-1],
+            cfg.task.get("num_eval_positions"),
+            allowed_positions=cfg.task.get(
+                "eval_positions", cfg.task.get("corrupt_positions")
+            ),
+        )
         batch_list = tasks.all_negative(test_data, batch, positions=eval_positions)
         pred_list = []
         for new_batch in batch_list:

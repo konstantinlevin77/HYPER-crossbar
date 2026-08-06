@@ -70,6 +70,32 @@ class StrictTypedNegativeSamplingTest(unittest.TestCase):
         sampled = tasks.negative_sampling(self.data, batch, 2, strict=True)
         self.assertEqual(sampled.shape[-1], 3)
 
+    def test_position_allowlist_keeps_position_zero_fixed(self):
+        batch = torch.tensor([[1, 4, 0]])
+        sampled = tasks.negative_sampling(
+            self.data,
+            batch,
+            num_negative=20,
+            max_positions_per_edge=1,
+            sampling_mode="strict_typed",
+            corrupt_positions=[1],
+        )
+
+        self.assertTrue(torch.all(sampled[0] == 1))
+        self.assertTrue(torch.all(sampled[1, 0, 1:] == 5))
+
+    def test_position_allowlist_rejects_out_of_range_positions(self):
+        with self.assertRaisesRegex(ValueError, "allowed positions must be between"):
+            tasks.get_active_positions(
+                torch.tensor([[1, 4]]), allowed_positions=[2]
+            )
+
+    def test_active_positions_are_intersected_with_allowlist(self):
+        positions = tasks.get_active_positions(
+            torch.tensor([[1, 2, 3, 4]]), allowed_positions=[1, 2, 3]
+        )
+        self.assertEqual(positions.tolist(), [1, 2, 3])
+
     def test_unknown_mode_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unknown negative sampling mode"):
             tasks.negative_sampling(

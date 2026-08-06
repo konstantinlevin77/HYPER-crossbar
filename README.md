@@ -183,6 +183,18 @@ first removes known true completions, then samples only entities observed at the
 same hyperedge position for the same relation. Entity `0` is always excluded
 because it is reserved for padding.
 
+Corruption can be restricted to zero-based entity positions (the relation column
+is excluded from this numbering):
+
+```yaml
+corrupt_positions: [1, 2, 3]
+eval_positions: [1, 2, 3]  # defaults to corrupt_positions when omitted
+```
+
+Setting these fields to `[1, 2, 3]` keeps disease position `0` fixed while
+corrupting gene, drug, or pathway positions. The sampler does not infer this
+behavior from the dataset name.
+
 For HYPER-RULE1 and HYPER-RULE2, per-node-type typed metrics can be enabled with:
 
 ```yaml
