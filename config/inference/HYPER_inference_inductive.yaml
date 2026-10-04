@@ -47,6 +47,10 @@ train:
   num_epoch: {{ epochs }}
   # Do evaluation after every epoch, test purposes only, to have a denser curve.
   eval_interval: 1
+  # When set, this takes precedence over eval_interval and validates after this
+  # many optimizer batches. This makes it possible to validate frequently while
+  # batch_per_epoch is null (a complete pass over the data).
+  eval_interval_batches: 25
   # Log interval is set to 10, meaning log every 10 batches, test purposes
   log_interval: 10
   batch_per_epoch: {{ bpe }}

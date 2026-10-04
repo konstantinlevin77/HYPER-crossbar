@@ -95,7 +95,15 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
     sampler = torch_data.DistributedSampler(train_triplets, world_size, rank)
     train_loader = torch_data.DataLoader(train_triplets, cfg.train.batch_size, sampler=sampler)
 
+    # ``None`` means a complete pass over the training loader.  Keeping the
+    # number of batches separate from num_epoch lets num_epoch be fractional:
+    # 1.5, for example, is one complete pass plus half of the next shuffled
+    # pass.
     batch_per_epoch = batch_per_epoch or len(train_loader)
+    num_epoch = float(cfg.train.num_epoch)
+    if num_epoch <= 0:
+        raise ValueError("cfg.train.num_epoch must be positive")
+    total_batches = math.ceil(num_epoch * batch_per_epoch)
 
     cls = cfg.optimizer.pop("class")
     optimizer = getattr(optim, cls)(model.parameters(), **cfg.optimizer)
@@ -108,95 +116,118 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
     else:
         parallel_model = model
 
-    eval_interval = cfg.train.get("eval_interval", math.ceil(cfg.train.num_epoch / 10))
-    if eval_interval <= 0:
-        raise ValueError("cfg.train.eval_interval must be a positive integer")
+    eval_interval_batches = cfg.train.get("eval_interval_batches")
+    if eval_interval_batches is None:
+        eval_interval = cfg.train.get("eval_interval", math.ceil(num_epoch / 10))
+        if eval_interval <= 0:
+            raise ValueError("cfg.train.eval_interval must be a positive integer")
+        eval_interval_batches = eval_interval * batch_per_epoch
+    if not isinstance(eval_interval_batches, int) or eval_interval_batches <= 0:
+        raise ValueError("cfg.train.eval_interval_batches must be a positive integer")
     best_result = float("-inf")
-    best_epoch = -1
+    best_checkpoint = None
 
-    batch_id = 0
-    for i in range(0, cfg.train.num_epoch, eval_interval):
-        parallel_model.train()
-        for epoch in range(i, min(cfg.train.num_epoch, i + eval_interval)):
-            if util.get_rank() == 0:
-                logger.warning(separator)
-                logger.warning("Epoch %d begin" % epoch)
+    def evaluate_and_checkpoint(progress_batches):
+        """Evaluate all ranks together and retain the best validation model."""
+        nonlocal best_result, best_checkpoint
 
-            losses = []
-            sampler.set_epoch(epoch)
-            for batch in islice(train_loader, batch_per_epoch):
-                batch = tasks.negative_sampling(train_data, batch, cfg.task.num_negative,
-                                                strict=cfg.task.get("strict_negative", True),
-                                                max_positions_per_edge=cfg.task.get("num_corrupt_positions"),
-                                                sampling_mode=cfg.task.get("negative_sampling"),
-                                                corrupt_positions=cfg.task.get("corrupt_positions"))
-                pred = parallel_model(train_data, batch)
-                target = torch.zeros_like(pred)
-                target[:, 0] = 1
-                loss = F.binary_cross_entropy_with_logits(pred, target, reduction="none")
-                neg_weight = torch.ones_like(pred)
-                if cfg.task.adversarial_temperature > 0:
-                    with torch.no_grad():
-                        neg_weight[:, 1:] = F.softmax(pred[:, 1:] / cfg.task.adversarial_temperature, dim=-1)
-                else:
-                    neg_weight[:, 1:] = 1 / cfg.task.num_negative
-                loss = (loss * neg_weight).sum(dim=-1) / neg_weight.sum(dim=-1)
-                loss = loss.mean()
-
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
-
-                if util.get_rank() == 0 and batch_id % cfg.train.log_interval == 0:
-                    logger.warning(separator)
-                    logger.warning("binary cross entropy: %g" % loss)
-                    if wandb_logger is not None:
-                        wandb_logger.log({"loss": loss.item(), "train/loss": loss.item()}, step=batch_id)
-                losses.append(loss.item())
-                if util.get_rank() == 0 and neptune_logger is not None:
-                    neptune_logger["train/loss"].append(loss)
-                batch_id += 1
-
-            if util.get_rank() == 0:
-                avg_loss = sum(losses) / len(losses)
-                logger.warning(separator)
-                logger.warning("Epoch %d end" % epoch)
-                logger.warning(line)
-                logger.warning("average binary cross entropy: %g" % avg_loss)
-                if neptune_logger is not None:
-                    neptune_logger["train/epoch_loss"].append(avg_loss)
-                if wandb_logger is not None:
-                    wandb_logger.log({"epoch": epoch, "epoch_loss": avg_loss, "train/epoch_loss": avg_loss})
-
-        epoch = min(cfg.train.num_epoch, i + eval_interval)
+        progress_epoch = progress_batches / batch_per_epoch
+        checkpoint = "model_epoch_%g.pth" % progress_epoch
         if rank == 0:
-            logger.warning("Save checkpoint to model_epoch_%d.pth" % epoch)
+            logger.warning("Save checkpoint to %s", checkpoint)
             state = {
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict()
             }
-            torch.save(state, "model_epoch_%d.pth" % epoch)
+            torch.save(state, checkpoint)
         util.synchronize()
 
         if rank == 0:
             logger.warning(separator)
-            logger.warning("Evaluate on valid")
-        valid_metrics = test(cfg, model, valid_data, filtered_data=filtered_data, device=device, logger=logger, return_metrics=True, neptune_logger=neptune_logger, logger_mode="valid")
+            logger.warning("Evaluate on valid after %d batches (%.3f epochs)", progress_batches, progress_epoch)
+        valid_metrics = test(cfg, model, valid_data, filtered_data=filtered_data, device=device,
+                             logger=logger, return_metrics=True, neptune_logger=neptune_logger,
+                             logger_mode="valid")
         result = valid_metrics["mrr"]
         if rank == 0:
-            _wandb_log_metrics(wandb_logger, "valid", valid_metrics, epoch)
+            _wandb_log_metrics(wandb_logger, "valid", valid_metrics, progress_epoch)
             if wandb_logger is not None and cfg.train.get("log_train_metrics", True):
                 logger.warning(separator)
                 logger.warning("Evaluate on train")
-                train_metrics = test(cfg, model, train_data, filtered_data=train_data, device=device, logger=logger, return_metrics=True, logger_mode="train")
-                _wandb_log_metrics(wandb_logger, "train", train_metrics, epoch)
+                train_metrics = test(cfg, model, train_data, filtered_data=train_data, device=device,
+                                     logger=logger, return_metrics=True, logger_mode="train")
+                _wandb_log_metrics(wandb_logger, "train", train_metrics, progress_epoch)
         if result > best_result:
             best_result = result
-            best_epoch = epoch
+            best_checkpoint = checkpoint
+
+    batch_id = 0
+    for epoch in range(math.ceil(num_epoch)):
+        if batch_id >= total_batches:
+            break
+        parallel_model.train()
+        if util.get_rank() == 0:
+            logger.warning(separator)
+            logger.warning("Epoch %d begin" % epoch)
+
+        losses = []
+        sampler.set_epoch(epoch)
+        batches_this_epoch = min(batch_per_epoch, total_batches - batch_id)
+        for batch in islice(train_loader, batches_this_epoch):
+            batch = tasks.negative_sampling(train_data, batch, cfg.task.num_negative,
+                                            strict=cfg.task.get("strict_negative", True),
+                                            max_positions_per_edge=cfg.task.get("num_corrupt_positions"),
+                                            sampling_mode=cfg.task.get("negative_sampling"),
+                                            corrupt_positions=cfg.task.get("corrupt_positions"))
+            pred = parallel_model(train_data, batch)
+            target = torch.zeros_like(pred)
+            target[:, 0] = 1
+            loss = F.binary_cross_entropy_with_logits(pred, target, reduction="none")
+            neg_weight = torch.ones_like(pred)
+            if cfg.task.adversarial_temperature > 0:
+                with torch.no_grad():
+                    neg_weight[:, 1:] = F.softmax(pred[:, 1:] / cfg.task.adversarial_temperature, dim=-1)
+            else:
+                neg_weight[:, 1:] = 1 / cfg.task.num_negative
+            loss = (loss * neg_weight).sum(dim=-1) / neg_weight.sum(dim=-1)
+            loss = loss.mean()
+
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            if util.get_rank() == 0 and batch_id % cfg.train.log_interval == 0:
+                logger.warning(separator)
+                logger.warning("binary cross entropy: %g" % loss)
+                if wandb_logger is not None:
+                    wandb_logger.log({"loss": loss.item(), "train/loss": loss.item()}, step=batch_id)
+            losses.append(loss.item())
+            if util.get_rank() == 0 and neptune_logger is not None:
+                neptune_logger["train/loss"].append(loss)
+            batch_id += 1
+
+            if batch_id % eval_interval_batches == 0:
+                evaluate_and_checkpoint(batch_id)
+                parallel_model.train()
+
+        if util.get_rank() == 0:
+            avg_loss = sum(losses) / len(losses)
+            logger.warning(separator)
+            logger.warning("Epoch %d end" % epoch)
+            logger.warning(line)
+            logger.warning("average binary cross entropy: %g" % avg_loss)
+            if neptune_logger is not None:
+                neptune_logger["train/epoch_loss"].append(avg_loss)
+            if wandb_logger is not None:
+                wandb_logger.log({"epoch": (epoch + 1), "epoch_loss": avg_loss, "train/epoch_loss": avg_loss})
+
+    # Always evaluate the final partial interval, including fractional epochs.
+    if batch_id % eval_interval_batches != 0:
+        evaluate_and_checkpoint(batch_id)
 
     if rank == 0:
-        logger.warning("Load checkpoint from model_epoch_%d.pth" % best_epoch)
-    state = torch.load("model_epoch_%d.pth" % best_epoch, map_location=device)
+        logger.warning("Load checkpoint from %s", best_checkpoint)
+    state = torch.load(best_checkpoint, map_location=device)
     model.load_state_dict(state["model"])
     util.synchronize()
 
